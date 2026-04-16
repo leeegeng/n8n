@@ -1,0 +1,319 @@
+{
+  "name": "工单系统原生集成示例",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "ticket-webhook",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "webhook-start",
+      "name": "Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "ticket-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析工单数据\nconst ticketData = $input.first().json.body;\n\n// 根据流程类型路由到不同分支\nconst workflowType = ticketData.workflow.code;\n\nreturn [\n  {\n    json: {\n      ...ticketData,\n      route: workflowType\n    }\n  }\n];"
+      },
+      "id": "parse-ticket",
+      "name": "解析工单数据",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "=",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.route }}",
+              "rightValue": "leave",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "route-workflow",
+      "name": "流程路由",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}/create-task",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.ticket.id }}",
+          "nodeId": "manager_approval",
+          "nodeName": "部门经理审批",
+          "assigneeType": 2,
+          "assigneeId": 2,
+          "taskType": 1,
+          "n8nExecutionId": "={{ $execution.id }}",
+          "dueTime": "={{ $now.plus(24, 'hour') }}"
+        },
+        "options": {}
+      },
+      "id": "create-manager-task",
+      "name": "创建经理审批任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}/wait-approval",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.ticket.id }}",
+          "nodeId": "manager_approval",
+          "timeout": 86400
+        },
+        "options": {
+          "timeout": 86400000
+        }
+      },
+      "id": "wait-manager-approval",
+      "name": "等待经理审批",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1050, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "=",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "condition-1",
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "approve",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        }
+      },
+      "id": "check-approval-result",
+      "name": "审批结果判断",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}/complete-node",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticketId }}",
+          "nodeId": "manager_approval",
+          "action": "approve",
+          "comment": "={{ $json.body.comment }}",
+          "processedBy": "={{ $json.body.userId }}",
+          "nextNode": {
+            "id": "end",
+            "name": "结束"
+          }
+        }
+      },
+      "id": "complete-approval",
+      "name": "完成审批节点",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 100]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.callbackUrl }}/complete-node",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticketId }}",
+          "nodeId": "manager_approval",
+          "action": "reject",
+          "comment": "={{ $json.body.comment }}",
+          "processedBy": "={{ $json.body.userId }}"
+        }
+      },
+      "id": "handle-reject",
+      "name": "处理驳回",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 300]
+    },
+    {
+      "parameters": {
+        "to": "={{ $json.ticket.creator.email }}",
+        "subject": "工单审批完成 - {{ $json.ticket.ticketNo }}",
+        "text": "=您的工单 {{ $json.ticket.title }} 已完成审批。",
+        "options": {}
+      },
+      "id": "send-email",
+      "name": "发送邮件通知",
+      "type": "n8n-nodes-base.emailSend",
+      "typeVersion": 2.1,
+      "position": [1650, 100]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={\"success\": true, \"message\": \"流程执行完成\"}"
+      },
+      "id": "respond-to-webhook",
+      "name": "Respond to Webhook",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [1850, 200]
+    }
+  ],
+  "connections": {
+    "Webhook": {
+      "main": [
+        [
+          {
+            "node": "解析工单数据",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "解析工单数据": {
+      "main": [
+        [
+          {
+            "node": "流程路由",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "流程路由": {
+      "main": [
+        [
+          {
+            "node": "创建经理审批任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建经理审批任务": {
+      "main": [
+        [
+          {
+            "node": "等待经理审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待经理审批": {
+      "main": [
+        [
+          {
+            "node": "审批结果判断",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "审批结果判断": {
+      "main": [
+        [
+          {
+            "node": "完成审批节点",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "处理驳回",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "完成审批节点": {
+      "main": [
+        [
+          {
+            "node": "发送邮件通知",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "发送邮件通知": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "处理驳回": {
+      "main": [
+        [
+          {
+            "node": "Respond to Webhook",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

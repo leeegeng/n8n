@@ -1,0 +1,507 @@
+{
+  "name": "请假审批-复杂条件-驳回",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "leave-workflow",
+        "responseMode": "onReceived"
+      },
+      "name": "接收工单",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "leave-workflow"
+    },
+    {
+      "parameters": {
+        "jsCode": "// 提取数据\nconst body = $input.first().json.body;\nconst ticket = body.ticket;\nconst formData = ticket.formData;\n\n// 计算请假天数\nconst startDate = new Date(formData.startDate);\nconst endDate = new Date(formData.endDate);\nconst days = Math.ceil((endDate - startDate) / (1000 * 60 * 60 * 24)) + 1;\n\n// 判断请假类型\nconst leaveType = formData.leaveType; // 病假、事假、年假\n\n// 判断是否需要HR审批（病假超过3天或事假超过1天）\nconst needHrApproval = (leaveType === '病假' && days > 3) || (leaveType === '事假' && days > 1);\n\n// 判断是否需要总经理审批（超过5天）\nconst needCeoApproval = days > 5;\n\nreturn [{\n  json: {\n    ...body,\n    calculated: {\n      days,\n      leaveType,\n      needHrApproval,\n      needCeoApproval\n    }\n  }\n}];"
+      },
+      "name": "计算条件",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/create-task",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.ticket.id,\n  nodeId: 'manager_approval',\n  nodeName: '部门经理审批',\n  assigneeType: 2,\n  assigneeId: 2,\n  taskType: 1,\n  n8nExecutionId: $execution.id,\n  dueTime: $now.plus(24, 'hour').toISOString()\n}) }"
+      },
+      "id": "create-manager-task",
+      "name": "创建经理审批任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/wait-approval",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.ticket.id,\n  nodeId: 'manager_approval',\n  timeout: 86400\n}) }}",
+        "options": {
+          "timeout": 86400000
+        }
+      },
+      "name": "等待经理审批",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "reject",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "是否驳回",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/complete-node",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.body.ticketId,\n  nodeId: 'manager_approval',\n  action: 'reject',\n  comment: $json.body.comment,\n  nextNode: {\n    id: 'start',\n    name: '重新提交'\n  }\n}) }}"
+      },
+      "name": "经理驳回-结束",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 150]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.calculated.needCeoApproval }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "需要总经理审批",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/create-task",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.ticket.id,\n  nodeId: 'ceo_approval',\n  nodeName: '总经理审批',\n  assigneeType: 1,\n  assigneeId: 1,\n  taskType: 1,\n  n8nExecutionId: $execution.id,\n  dueTime: $now.plus(48, 'hour').toISOString()\n}) }}"
+      },
+      "name": "创建CEO审批任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1450, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/wait-approval",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.ticket.id,\n  nodeId: 'ceo_approval',\n  timeout: 172800\n}) }}",
+        "options": {
+          "timeout": 172800000
+        }
+      },
+      "name": "等待CEO审批",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1650, 200]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "reject",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "CEO是否驳回",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1850, 200]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/complete-node",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": "={{ JSON.stringify({\n  ticketId: $json.body.ticketId,\n  nodeId: 'ceo_approval',\n  action: 'reject',\n  comment: $json.body.comment\n}) }}"
+      },
+      "name": "CEO驳回-结束",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2050, 100]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.calculated.needHrApproval }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "需要HR审批",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1450, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/create-task",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": {
+          "ticketId": "={{ $json.ticket.id }}",
+          "nodeId": "hr_approval",
+          "nodeName": "人事审批",
+          "assigneeType": 2,
+          "assigneeId": 5,
+          "taskType": 1,
+          "n8nExecutionId": "={{ $execution.id }}",
+          "dueTime": "={{ $now.plus(24, 'hour').toISOString() }}"
+        }
+      },
+      "name": "创建HR审批任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1650, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/wait-approval",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": {
+          "ticketId": "={{ $json.ticket.id }}",
+          "nodeId": "hr_approval",
+          "timeout": 86400
+        },
+        "options": {
+          "timeout": 86400000
+        }
+      },
+      "name": "等待HR审批",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1850, 400]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.body.action }}",
+              "rightValue": "reject",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "HR是否驳回",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [2050, 400]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/complete-node",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": {
+          "ticketId": "={{ $json.body.ticketId }}",
+          "nodeId": "hr_approval",
+          "action": "reject",
+          "comment": "={{ $json.body.comment }}",
+          "nextNode": {
+            "id": "manager_approval",
+            "name": "部门经理审批"
+          }
+        }
+      },
+      "name": "HR驳回-回退经理",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=http://172.16.194.111:3000/api/webhook/n8n/complete-node",
+        "sendBody": true,
+        "specifyBody": "json",
+        "contentType": "json",
+        "json": true,
+        "body": {
+          "ticketId": "={{ $json.ticket.id }}",
+          "nodeId": "end",
+          "action": "complete",
+          "comment": "审批流程完成"
+        }
+      },
+      "name": "流程完成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [2250, 500]
+    }
+  ],
+  "connections": {
+    "接收工单": {
+      "main": [
+        [
+          {
+            "node": "计算条件",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "计算条件": {
+      "main": [
+        [
+          {
+            "node": "创建经理审批任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建经理审批任务": {
+      "main": [
+        [
+          {
+            "node": "等待经理审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待经理审批": {
+      "main": [
+        [
+          {
+            "node": "是否驳回",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "是否驳回": {
+      "main": [
+        [
+          {
+            "node": "经理驳回-结束",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "需要总经理审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "需要总经理审批": {
+      "main": [
+        [
+          {
+            "node": "创建CEO审批任务",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "需要HR审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建CEO审批任务": {
+      "main": [
+        [
+          {
+            "node": "等待CEO审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待CEO审批": {
+      "main": [
+        [
+          {
+            "node": "CEO是否驳回",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "CEO是否驳回": {
+      "main": [
+        [
+          {
+            "node": "CEO驳回-结束",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "需要HR审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "需要HR审批": {
+      "main": [
+        [
+          {
+            "node": "创建HR审批任务",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "流程完成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建HR审批任务": {
+      "main": [
+        [
+          {
+            "node": "等待HR审批",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待HR审批": {
+      "main": [
+        [
+          {
+            "node": "HR是否驳回",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HR是否驳回": {
+      "main": [
+        [
+          {
+            "node": "HR驳回-回退经理",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "流程完成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "credentials": {
+    "httpHeaderAuth": {
+      "id": "ticket-system-api",
+      "name": "Ticket System API",
+      "type": "httpHeaderAuth",
+      "data": {
+        "name": "X-API-Key",
+        "value": "ticket-system-webhook-secret-key-2024"
+      }
+    }
+  }
+}

@@ -1,0 +1,121 @@
+{
+  "name": "采购申请流程",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "开始",
+      "type": "start",
+      "typeVersion": 1,
+      "position": [100, 300]
+    },
+    {
+      "parameters": {
+        "assigneeType": 2,
+        "assigneeId": 2,
+        "taskType": 1,
+        "allowReject": true
+      },
+      "id": "dept_manager",
+      "name": "部门经理审批",
+      "type": "task",
+      "typeVersion": 1,
+      "position": [300, 300]
+    },
+    {
+      "parameters": {
+        "condition": "amount >= 10000"
+      },
+      "id": "amount_check",
+      "name": "金额判断",
+      "type": "condition",
+      "typeVersion": 1,
+      "position": [500, 300]
+    },
+    {
+      "parameters": {
+        "assigneeType": 2,
+        "assigneeId": 1,
+        "taskType": 2,
+        "assignees": [
+          { "userId": 1, "name": "总经理" },
+          { "userId": 2, "name": "财务经理" }
+        ],
+        "allowReject": true
+      },
+      "id": "countersign",
+      "name": "高管会签",
+      "type": "task",
+      "typeVersion": 1,
+      "position": [700, 150]
+    },
+    {
+      "parameters": {
+        "assigneeType": 2,
+        "assigneeId": 6,
+        "taskType": 1,
+        "allowReject": false
+      },
+      "id": "finance_approval",
+      "name": "财务审批",
+      "type": "task",
+      "typeVersion": 1,
+      "position": [700, 300]
+    },
+    {
+      "parameters": {
+        "webhookUrl": "http://172.16.194.119:5678/webhook/purchase-notification"
+      },
+      "id": "notify_supplier",
+      "name": "通知供应商",
+      "type": "webhook",
+      "typeVersion": 1,
+      "position": [900, 300]
+    },
+    {
+      "parameters": {},
+      "id": "end",
+      "name": "结束",
+      "type": "end",
+      "typeVersion": 1,
+      "position": [1100, 300]
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "dept_manager"
+    },
+    {
+      "source": "dept_manager",
+      "target": "amount_check"
+    },
+    {
+      "source": "amount_check",
+      "target": "countersign",
+      "condition": "amount >= 10000"
+    },
+    {
+      "source": "amount_check",
+      "target": "finance_approval",
+      "condition": "amount < 10000"
+    },
+    {
+      "source": "countersign",
+      "target": "finance_approval"
+    },
+    {
+      "source": "finance_approval",
+      "target": "notify_supplier"
+    },
+    {
+      "source": "notify_supplier",
+      "target": "end"
+    }
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

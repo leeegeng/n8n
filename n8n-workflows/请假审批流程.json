@@ -1,0 +1,101 @@
+{
+  "name": "请假审批流程",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "start",
+      "name": "开始",
+      "type": "start",
+      "typeVersion": 1,
+      "position": [100, 200]
+    },
+    {
+      "parameters": {
+        "assigneeType": 2,
+        "assigneeId": 2,
+        "taskType": 1,
+        "allowReject": true
+      },
+      "id": "manager_approval",
+      "name": "部门经理审批",
+      "type": "task",
+      "typeVersion": 1,
+      "position": [300, 200]
+    },
+    {
+      "parameters": {
+        "webhookUrl": "http://localhost:3000/api/webhook/n8n/notify",
+        "condition": "days > 3"
+      },
+      "id": "condition",
+      "name": "判断请假天数",
+      "type": "condition",
+      "typeVersion": 1,
+      "position": [500, 200]
+    },
+    {
+      "parameters": {
+        "assigneeType": 1,
+        "assigneeId": 1,
+        "taskType": 1,
+        "allowReject": true
+      },
+      "id": "hr_approval",
+      "name": "人事审批",
+      "type": "task",
+      "typeVersion": 1,
+      "position": [700, 100]
+    },
+    {
+      "parameters": {
+        "webhookUrl": "http://172.16.194.119:5678/webhook/leave-notification"
+      },
+      "id": "send_notification",
+      "name": "发送通知",
+      "type": "webhook",
+      "typeVersion": 1,
+      "position": [900, 200]
+    },
+    {
+      "parameters": {},
+      "id": "end",
+      "name": "结束",
+      "type": "end",
+      "typeVersion": 1,
+      "position": [1100, 200]
+    }
+  ],
+  "edges": [
+    {
+      "source": "start",
+      "target": "manager_approval"
+    },
+    {
+      "source": "manager_approval",
+      "target": "condition"
+    },
+    {
+      "source": "condition",
+      "target": "hr_approval",
+      "condition": "days > 3"
+    },
+    {
+      "source": "condition",
+      "target": "send_notification",
+      "condition": "days <= 3"
+    },
+    {
+      "source": "hr_approval",
+      "target": "send_notification"
+    },
+    {
+      "source": "send_notification",
+      "target": "end"
+    }
+  ],
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "staticData": null,
+  "tags": []
+}

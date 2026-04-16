@@ -1,0 +1,198 @@
+{
+  "name": "会签审批流程",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "countersign-workflow",
+        "responseMode": "onReceived",
+        "options": {}
+      },
+      "name": "接收工单",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 1,
+      "position": [250, 300],
+      "webhookId": "countersign-workflow"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callbackBaseUrl }}/create-task",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticket.id }}",
+          "nodeId": "countersign_approval",
+          "nodeName": "多人会签审批",
+          "assigneeType": 1,
+          "assigneeId": 0,
+          "taskType": 2,
+          "assignees": [
+            {"userId": 1, "userName": "总经理"},
+            {"userId": 2, "userName": "财务经理"},
+            {"userId": 3, "userName": "技术总监"}
+          ],
+          "n8nExecutionId": "={{ $execution.id }}",
+          "dueTime": "={{ $now.plus(48, 'hour').toISOString() }}"
+        }
+      },
+      "name": "创建会签任务",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [450, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callbackBaseUrl }}/wait-approval",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticket.id }}",
+          "nodeId": "countersign_approval",
+          "timeout": 172800,
+          "waitForAll": true
+        },
+        "options": {
+          "timeout": 172800000
+        }
+      },
+      "name": "等待所有人会签",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [650, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// 解析会签结果\nconst results = $json.body.countersignResults || [];\nconst total = results.length;\nconst approved = results.filter(r => r.action === 'approve').length;\nconst rejected = results.filter(r => r.action === 'reject').length;\n\n// 判断是否全部通过\nconst allApproved = rejected === 0;\n\n// 判断是否有人驳回\nconst anyRejected = rejected > 0;\n\nreturn [{\n  json: {\n    ...$json,\n    countersignSummary: {\n      total,\n      approved,\n      rejected,\n      allApproved,\n      anyRejected\n    }\n  }\n}];"
+      },
+      "name": "统计会签结果",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [850, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "conditions": [
+            {
+              "leftValue": "={{ $json.countersignSummary.anyRejected }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ]
+        }
+      },
+      "name": "有人驳回",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1050, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callbackBaseUrl }}/complete-node",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticketId }}",
+          "nodeId": "countersign_approval",
+          "action": "reject",
+          "comment": "={{ '会签被驳回：' + $json.body.countersignResults.filter(r => r.action === 'reject').map(r => r.userName + ':' + r.comment).join('; ') }}"
+        }
+      },
+      "name": "会签驳回-结束",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 150]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $json.body.callbackBaseUrl }}/complete-node",
+        "sendBody": true,
+        "contentType": "json",
+        "body": {
+          "ticketId": "={{ $json.body.ticketId }}",
+          "nodeId": "countersign_approval",
+          "action": "complete",
+          "comment": "={{ '会签全部通过：' + $json.body.countersignResults.map(r => r.userName + ':通过').join('; ') }}"
+        }
+      },
+      "name": "会签通过-完成",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1250, 450]
+    }
+  ],
+  "connections": {
+    "接收工单": {
+      "main": [
+        [
+          {
+            "node": "创建会签任务",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "创建会签任务": {
+      "main": [
+        [
+          {
+            "node": "等待所有人会签",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "等待所有人会签": {
+      "main": [
+        [
+          {
+            "node": "统计会签结果",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "统计会签结果": {
+      "main": [
+        [
+          {
+            "node": "有人驳回",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "有人驳回": {
+      "main": [
+        [
+          {
+            "node": "会签驳回-结束",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "会签通过-完成",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  }
+}
