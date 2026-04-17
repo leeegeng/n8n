@@ -12,7 +12,7 @@
           </div>
           <div class="header-right">
             <el-button
-              v-if="ticket.status === 1 && isCreator"
+              v-if="ticket && ticket.status === 1 && isCreator"
               type="danger"
               @click="handleCancel"
             >
@@ -25,6 +25,7 @@
       <template v-if="ticket">
         <!-- 工单基本信息 -->
         <div class="ticket-info">
+          <pre style="background:#f5f5f5;padding:10px;margin-bottom:10px;overflow:auto;max-height:200px;">{{ JSON.stringify(ticket, null, 2) }}</pre>
           <el-descriptions :column="3" border>
             <el-descriptions-item label="工单编号">{{ ticket.ticket_no }}</el-descriptions-item>
             <el-descriptions-item label="工单标题">{{ ticket.title }}</el-descriptions-item>
@@ -73,7 +74,7 @@
         <el-divider />
 
         <!-- 审批操作区 -->
-        <div v-if="canApprove" class="approval-section">
+        <div v-if="canApprove || hasTodoTask" class="approval-section">
           <h3>审批操作</h3>
 
           <!-- 会签任务 -->
@@ -109,8 +110,8 @@
             </el-form>
           </template>
 
-          <!-- 普通审批任务 -->
-          <template v-else-if="currentTask">
+          <!-- 普通审批任务（包括从待办页面跳转过来的情况） -->
+          <template v-else>
             <el-form :model="approvalForm" label-width="80px">
               <el-form-item label="审批意见">
                 <el-radio-group v-model="approvalForm.action">
@@ -130,13 +131,13 @@
                 <el-button type="primary" :loading="approvalLoading" @click="handleApprove">
                   提交审批
                 </el-button>
-                <el-button @click="showTransfer = true">转派</el-button>
+                <el-button v-if="currentTask" @click="showTransfer = true">转派</el-button>
               </el-form-item>
             </el-form>
           </template>
         </div>
 
-        <el-divider v-if="canApprove" />
+        <el-divider v-if="canApprove || hasTodoTask" />
 
         <!-- 流转历史 -->
         <div class="history-section">
@@ -276,24 +277,37 @@ const isCreator = computed(() => {
 })
 
 const canApprove = computed(() => {
+  // 状态为进行中(1) 且 有当前任务或会签任务
   return ticket.value?.status === 1 && (currentTask.value || countersignTask.value)
+})
+
+// 是否有待办任务（从待办页面跳转过来时显示审批按钮）
+const hasTodoTask = computed(() => {
+  return ticket.value?.status === 1 && ticket.value?.current_node_id && ticket.value?.current_node_id !== 'n8n_processing'
 })
 
 const fetchTicket = async () => {
   loading.value = true
   try {
     const res = await getTicket(ticketId)
+    console.log('[TicketDetail] API 返回数据:', res)
     ticket.value = res
+    console.log('[TicketDetail] ticket.value 设置后:', ticket.value)
 
     // 查找当前用户的任务
+    console.log('[TicketDetail] 查找任务, tasks:', res.tasks)
+    console.log('[TicketDetail] 当前用户:', { userId: userStore.userId, roles: userStore.roles, departmentId: userStore.userInfo?.departmentId })
     if (res.tasks) {
-      currentTask.value = res.tasks.find(t =>
-        t.status === 0 && (
+      currentTask.value = res.tasks.find(t => {
+        const match = t.status === 0 && (
           (t.assignee_type === 1 && t.assignee_id === userStore.userId) ||
-          (t.assignee_type === 2 && userStore.roles.some(r => r.id === t.assignee_id)) ||
+          (t.assignee_type === 2 && userStore.roles?.some(r => r.id === t.assignee_id)) ||
           (t.assignee_type === 3 && t.assignee_id === userStore.userInfo?.departmentId)
         )
-      )
+        console.log(`[TicketDetail] 任务 ${t.id} (${t.node_name}): assignee_type=${t.assignee_type}, assignee_id=${t.assignee_id}, status=${t.status}, match=${match}`)
+        return match
+      })
+      console.log('[TicketDetail] 匹配到的任务:', currentTask.value)
     }
   } catch (error) {
     console.error('获取工单详情失败:', error)
@@ -391,11 +405,17 @@ const formatDate = (date) => {
 const handleApprove = async () => {
   approvalLoading.value = true
   try {
-    await approveTicket(ticketId, {
-      taskId: currentTask.value.id,
+    // 如果有当前任务，使用 taskId；否则使用 nodeId
+    const params = {
       action: approvalForm.action,
       comment: approvalForm.comment
-    })
+    }
+    if (currentTask.value) {
+      params.taskId = currentTask.value.id
+    } else if (ticket.value?.current_node_id) {
+      params.nodeId = ticket.value.current_node_id
+    }
+    await approveTicket(ticketId, params)
     ElMessage.success(approvalForm.action === 'approve' ? '审批通过' : '已驳回')
     fetchTicket()
   } catch (error) {

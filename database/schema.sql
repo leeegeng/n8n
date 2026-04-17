@@ -212,6 +212,21 @@ INSERT INTO users (username, password, real_name, email, department_id) VALUES
 INSERT INTO user_roles (user_id, role_id) VALUES (1, 1);
 
 -- 创建索引
+-- 审批结果表（用于 n8n Webhook 节点查询，服务重启后可恢复）
+CREATE TABLE IF NOT EXISTS approval_results (
+    id INT PRIMARY KEY AUTO_INCREMENT,
+    ticket_id INT NOT NULL COMMENT '工单ID',
+    node_id VARCHAR(100) NOT NULL COMMENT '节点ID',
+    action VARCHAR(20) NOT NULL COMMENT '审批操作: approve-通过 reject-驳回',
+    comment TEXT COMMENT '审批意见',
+    user_id INT NOT NULL COMMENT '审批人ID',
+    user_name VARCHAR(100) COMMENT '审批人姓名',
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE KEY uk_ticket_node (ticket_id, node_id),
+    INDEX idx_created_at (created_at)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='审批结果记录表（供n8n Webhook节点查询）';
+
+-- 创建索引
 CREATE INDEX idx_tickets_status ON tickets(status);
 CREATE INDEX idx_tickets_created_by ON tickets(created_by);
 CREATE INDEX idx_tickets_workflow_id ON tickets(workflow_id);
@@ -219,3 +234,4 @@ CREATE INDEX idx_ticket_tasks_assignee ON ticket_tasks(assignee_type, assignee_i
 CREATE INDEX idx_ticket_tasks_ticket_id ON ticket_tasks(ticket_id);
 CREATE INDEX idx_ticket_history_ticket_id ON ticket_history(ticket_id);
 CREATE INDEX idx_webhook_logs_ticket_id ON webhook_logs(ticket_id);
+CREATE INDEX idx_approval_results_ticket ON approval_results(ticket_id, node_id);

@@ -35,3 +35,7 @@ export const getTodoTasks = () => {
 export const getMyTickets = (params) => {
   return request.get('/tickets/my/created', { params })
 }
+
+export const deleteTicket = (id) => {
+  return request.delete(`/tickets/${id}`)
+}

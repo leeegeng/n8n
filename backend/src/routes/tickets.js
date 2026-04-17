@@ -94,6 +94,7 @@ router.get('/:id', authMiddleware, [
         }
 
         const { id } = req.params;
+        console.log(`[TicketAPI] 获取工单详情, ID: ${id}`);
 
         const ticket = await db.getOne(
             `SELECT t.*, u.real_name as creator_name, d.name as department_name,
@@ -106,19 +107,41 @@ router.get('/:id', authMiddleware, [
             [id]
         );
 
+        console.log(`[TicketAPI] 查询结果:`, ticket ? `找到工单 ${ticket.ticket_no}` : '工单不存在');
+
         if (!ticket) {
             return response.error(res, '工单不存在', 404);
         }
 
-        // 解析表单数据
+        // 解析表单数据（MySQL JSON类型可能已自动解析为对象）
         if (ticket.form_data) {
-            ticket.formData = JSON.parse(ticket.form_data);
+            if (typeof ticket.form_data === 'string') {
+                try {
+                    ticket.formData = JSON.parse(ticket.form_data);
+                } catch (e) {
+                    console.warn(`[TicketAPI] form_data 解析失败:`, ticket.form_data);
+                    ticket.formData = ticket.form_data;
+                }
+            } else {
+                // 已经是对象格式
+                ticket.formData = ticket.form_data;
+            }
             delete ticket.form_data;
         }
 
-        // 解析流程定义
+        // 解析流程定义（MySQL JSON类型可能已自动解析为对象）
         if (ticket.definition_json) {
-            ticket.workflowDefinition = JSON.parse(ticket.definition_json);
+            if (typeof ticket.definition_json === 'string') {
+                try {
+                    ticket.workflowDefinition = JSON.parse(ticket.definition_json);
+                } catch (e) {
+                    console.warn(`[TicketAPI] definition_json 解析失败:`, ticket.definition_json);
+                    ticket.workflowDefinition = ticket.definition_json;
+                }
+            } else {
+                // 已经是对象格式
+                ticket.workflowDefinition = ticket.definition_json;
+            }
             delete ticket.definition_json;
         }
 
@@ -455,6 +478,79 @@ router.post('/:id/cancel', authMiddleware, [
     } catch (error) {
         console.error('取消工单错误:', error);
         response.error(res, '取消工单失败');
+    }
+});
+
+// 删除工单
+router.delete('/:id', authMiddleware, [
+    param('id').isInt().withMessage('工单ID必须是整数')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return response.badRequest(res, errors.array()[0].msg);
+        }
+
+        const { id } = req.params;
+        const userId = req.user.id;
+
+        // 检查工单是否存在
+        const ticket = await db.getOne(
+            'SELECT id, status, created_by FROM tickets WHERE id = ?',
+            [id]
+        );
+
+        if (!ticket) {
+            return response.error(res, '工单不存在', 404);
+        }
+
+        // 只有创建者或管理员可以删除
+        const isAdmin = req.user.roles && req.user.roles.some(role => role.code === 'admin');
+        if (ticket.created_by !== userId && !isAdmin) {
+            return response.error(res, '无权删除此工单', 403);
+        }
+
+        // 只有已取消或已完成的工单可以删除
+        if (ticket.status !== 0 && ticket.status !== 2) {
+            return response.error(res, '只能删除已取消或已完成的工单', 400);
+        }
+
+        const conn = await db.getConnection();
+        try {
+            await db.beginTransaction(conn);
+
+            // 删除工单历史记录
+            await db.execute(
+                'DELETE FROM ticket_history WHERE ticket_id = ?',
+                [id],
+                conn
+            );
+
+            // 删除工单任务
+            await db.execute(
+                'DELETE FROM ticket_tasks WHERE ticket_id = ?',
+                [id],
+                conn
+            );
+
+            // 删除工单
+            await db.execute(
+                'DELETE FROM tickets WHERE id = ?',
+                [id],
+                conn
+            );
+
+            await db.commit(conn);
+            response.success(res, null, '工单删除成功');
+        } catch (error) {
+            await db.rollback(conn);
+            throw error;
+        } finally {
+            db.release(conn);
+        }
+    } catch (error) {
+        console.error('删除工单错误:', error);
+        response.error(res, '删除工单失败');
     }
 });
 

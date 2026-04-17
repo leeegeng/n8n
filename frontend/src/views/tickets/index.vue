@@ -82,9 +82,17 @@
             {{ formatDate(row.created_at) }}
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button type="primary" link @click="handleView(row)">查看</el-button>
+            <el-button 
+              v-if="row.status === 0 || row.status === 2" 
+              type="danger" 
+              link 
+              @click="handleDelete(row)"
+            >
+              删除
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -109,8 +117,9 @@
 import { ref, reactive, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import dayjs from 'dayjs'
-import { getTickets } from '@/api/tickets'
+import { getTickets, deleteTicket } from '@/api/tickets'
 import { getWorkflows } from '@/api/workflows'
+import { ElMessage, ElMessageBox } from 'element-plus'
 
 const router = useRouter()
 const loading = ref(false)
@@ -205,6 +214,24 @@ const handlePageChange = (page) => {
 
 const handleView = (row) => {
   router.push(`/tickets/detail/${row.id}`)
+}
+
+const handleDelete = async (row) => {
+  try {
+    await ElMessageBox.confirm(
+      `确定要删除工单 "${row.title}" 吗？删除后不可恢复。`,
+      '提示',
+      { type: 'warning' }
+    )
+    await deleteTicket(row.id)
+    ElMessage.success('删除成功')
+    fetchTickets()
+  } catch (error) {
+    if (error !== 'cancel') {
+      console.error('删除工单失败:', error)
+      ElMessage.error(error.response?.data?.message || '删除失败')
+    }
+  }
 }
 
 onMounted(() => {

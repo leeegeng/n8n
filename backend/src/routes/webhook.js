@@ -16,11 +16,19 @@ const validateApiKey = (req, res, next) => {
     next();
 };
 
+// 调试日志中间件
+const debugLog = (req, res, next) => {
+    console.log(`\n[${new Date().toISOString()}] ${req.method} ${req.originalUrl}`);
+    console.log('Headers:', JSON.stringify(req.headers, null, 2));
+    console.log('Body:', JSON.stringify(req.body, null, 2));
+    next();
+};
+
 /**
  * 创建审批任务
  * n8n 调用此接口创建审批任务，并通知相关用户
  */
-router.post('/n8n/create-task', validateApiKey, [
+router.post('/n8n/create-task', debugLog, validateApiKey, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('nodeId').notEmpty().withMessage('节点ID不能为空'),
     body('nodeName').notEmpty().withMessage('节点名称不能为空'),
@@ -45,7 +53,7 @@ router.post('/n8n/create-task', validateApiKey, [
  * 等待审批
  * n8n 调用此接口进入等待状态，直到用户提交审批
  */
-router.post('/n8n/wait-approval', validateApiKey, [
+router.post('/n8n/wait-approval', debugLog, validateApiKey, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('nodeId').notEmpty().withMessage('节点ID不能为空')
 ], async (req, res) => {
@@ -68,7 +76,7 @@ router.post('/n8n/wait-approval', validateApiKey, [
  * 完成节点/流程
  * n8n 调用此接口标记节点完成或流程结束
  */
-router.post('/n8n/complete-node', validateApiKey, [
+router.post('/n8n/complete-node', debugLog, validateApiKey, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('action').isIn(['complete', 'reject']).withMessage('操作类型无效')
 ], async (req, res) => {
@@ -87,7 +95,7 @@ router.post('/n8n/complete-node', validateApiKey, [
 });
 
 // 以下接口保留用于兼容
-router.post('/n8n/ticket-status', validateApiKey, [
+router.post('/n8n/ticket-status', debugLog, validateApiKey, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('status').isIn([0, 1, 2, 3]).withMessage('状态值无效')
 ], async (req, res) => {
@@ -131,7 +139,7 @@ router.post('/n8n/ticket-status', validateApiKey, [
 });
 
 // n8n回调：推进到下一节点
-router.post('/n8n/proceed', [
+router.post('/n8n/proceed', debugLog, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('nextNodeId').notEmpty().withMessage('下一节点ID不能为空')
 ], async (req, res) => {
@@ -207,7 +215,7 @@ router.post('/n8n/proceed', [
 });
 
 // n8n回调：创建子工单
-router.post('/n8n/create-sub-ticket', [
+router.post('/n8n/create-sub-ticket', debugLog, [
     body('parentTicketId').isInt().withMessage('父工单ID不能为空'),
     body('workflowId').isInt().withMessage('流程ID不能为空'),
     body('title').notEmpty().withMessage('标题不能为空')
@@ -252,7 +260,7 @@ router.post('/n8n/create-sub-ticket', [
 });
 
 // n8n回调：发送通知
-router.post('/n8n/notify', [
+router.post('/n8n/notify', debugLog, [
     body('ticketId').isInt().withMessage('工单ID不能为空'),
     body('notifyType').notEmpty().withMessage('通知类型不能为空'),
     body('recipients').isArray().withMessage('接收人必须是数组')
@@ -300,6 +308,74 @@ router.post('/n8n/notify', [
     } catch (error) {
         console.error('发送通知错误:', error);
         response.error(res, '发送通知失败');
+    }
+});
+
+/**
+ * 审批完成回调 - 供 n8n Webhook 节点调用
+ * 用户提交审批后，本地系统调用此接口通知 n8n 继续执行
+ * 这是服务重启后恢复机制的核心接口
+ */
+router.post('/n8n/approval-callback/:ticketId/:nodeId', debugLog, validateApiKey, [
+    body('action').isIn(['approve', 'reject']).withMessage('操作类型无效'),
+    body('userId').isInt().withMessage('用户ID不能为空')
+], async (req, res) => {
+    try {
+        const errors = validationResult(req);
+        if (!errors.isEmpty()) {
+            return response.badRequest(res, errors.array()[0].msg);
+        }
+
+        const { ticketId, nodeId } = req.params;
+        const { action, comment, userId, userName } = req.body;
+
+        // 调用引擎处理审批提交（不依赖内存中的 pendingCallbacks）
+        const result = await n8nWorkflowEngine.submitApproval(parseInt(ticketId), {
+            nodeId,
+            action,
+            comment,
+            userId,
+            userName
+        });
+
+        // 返回审批结果给 n8n
+        response.success(res, {
+            action,
+            comment,
+            userId,
+            userName,
+            timestamp: new Date().toISOString()
+        }, '审批结果已接收');
+    } catch (error) {
+        console.error('审批回调失败:', error);
+        response.error(res, error.message || '审批回调失败');
+    }
+});
+
+/**
+ * 查询审批结果 - 供 n8n Webhook 节点轮询查询
+ * 用于 Webhook 节点启动后检查是否有已完成的审批
+ */
+router.get('/n8n/approval-result/:ticketId/:nodeId', debugLog, validateApiKey, async (req, res) => {
+    try {
+        const { ticketId, nodeId } = req.params;
+
+        const result = await n8nWorkflowEngine.getApprovalResult(parseInt(ticketId), nodeId);
+
+        if (result) {
+            response.success(res, {
+                found: true,
+                ...result
+            }, '审批结果查询成功');
+        } else {
+            response.success(res, {
+                found: false,
+                message: '暂无审批结果'
+            }, '暂无审批结果');
+        }
+    } catch (error) {
+        console.error('查询审批结果失败:', error);
+        response.error(res, error.message || '查询审批结果失败');
     }
 });
 
